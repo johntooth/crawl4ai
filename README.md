@@ -821,6 +821,45 @@ For production environments, we recommend using the stable version. For testing 
 
 </details>
 
+## 🧪 Testing
+
+Crawl4AI includes comprehensive test suites to ensure reliability and performance:
+
+### Exhaustive Crawling Tests
+The domain intelligence crawler includes a dedicated test suite:
+
+```bash
+# Run all exhaustive crawling tests
+python tests/exhaustive/run_all_tests.py
+
+# Run specific test categories
+python tests/exhaustive/test_exhaustive_basic.py          # Basic functionality
+python tests/exhaustive/test_exhaustive_performance.py    # Performance benchmarks
+python tests/exhaustive/test_mock_website_scenarios.py    # Mock website patterns
+python tests/exhaustive/test_exhaustive_orchestration.py  # Real crawling tests
+```
+
+**Test Coverage:**
+- ✅ Configuration validation and presets
+- ✅ Dead-end detection algorithms
+- ✅ Performance testing (1000+ URLs)
+- ✅ Mock website scenarios (linear, hub-spoke, tree, cyclic)
+- ✅ Real-world crawling integration
+- ✅ Memory usage and leak detection
+
+See [`tests/exhaustive/README.md`](tests/exhaustive/README.md) for detailed testing documentation.
+
+### General Tests
+```bash
+# Run all tests with pytest
+python -m pytest tests/ -v
+
+# Run specific test categories
+python -m pytest tests/async/ -v        # Async functionality
+python -m pytest tests/browser/ -v      # Browser automation
+python -m pytest tests/general/ -v      # General functionality
+```
+
 ## 📖 Documentation & Roadmap 
 
 > 🚨 **Documentation Update Alert**: We're undertaking a major documentation overhaul next week to reflect recent updates and improvements. Stay tuned for a more comprehensive and up-to-date guide!

@@ -4,6 +4,15 @@ import warnings
 from .async_webcrawler import AsyncWebCrawler, CacheMode
 # MODIFIED: Add SeedingConfig and VirtualScrollConfig here
 from .async_configs import BrowserConfig, CrawlerRunConfig, HTTPCrawlerConfig, LLMConfig, ProxyConfig, GeolocationConfig, SeedingConfig, VirtualScrollConfig, LinkPreviewConfig, MatchMode
+# NEW: Import ExhaustiveCrawlConfig for domain intelligence crawler
+from .exhaustive_configs import ExhaustiveCrawlConfig, create_exhaustive_preset_config
+# NEW: Import exhaustive strategy configuration functions
+from .exhaustive_strategy_config import (
+    create_exhaustive_bfs_strategy,
+    create_minimal_filter_chain,
+    configure_exhaustive_crawler_settings,
+    create_exhaustive_strategy_preset
+)
 
 from .content_scraping_strategy import (
     ContentScrapingStrategy,
@@ -73,6 +82,17 @@ from .deep_crawling import (
     DFSDeepCrawlStrategy,
     DeepCrawlDecorator,
 )
+# NEW: File Discovery Filter
+from .file_discovery_filter import (
+    FileDiscoveryFilter,
+    FileType,
+    FileMetadata,
+    FileDiscoveryStats,
+    create_document_filter,
+    create_data_filter,
+    create_media_filter,
+    create_comprehensive_filter,
+)
 # NEW: Import AsyncUrlSeeder
 from .async_url_seeder import AsyncUrlSeeder
 # Adaptive Crawler
@@ -82,6 +102,24 @@ from .adaptive_crawler import (
     CrawlState,
     CrawlStrategy,
     StatisticalStrategy
+)
+
+# NEW: Exhaustive Crawling with Dead-End Detection
+from .exhaustive_analytics import (
+    ExhaustiveAnalytics,
+    DeadEndMetrics,
+    URLTrackingState
+)
+from .exhaustive_webcrawler import (
+    ExhaustiveAsyncWebCrawler,
+    ExhaustiveCrawlConfig,
+    create_exhaustive_crawler
+)
+from .exhaustive_integration import (
+    ExhaustiveCrawlIntegration,
+    configure_exhaustive_crawler,
+    create_dead_end_detector,
+    analyze_url_discovery_rate
 )
 
 # C4A Script Language Support
@@ -136,6 +174,15 @@ __all__ = [
     "FilterStats",
     "URLFilter",
     "SEOFilter",
+    # NEW: File Discovery Filter exports
+    "FileDiscoveryFilter",
+    "FileType",
+    "FileMetadata", 
+    "FileDiscoveryStats",
+    "create_document_filter",
+    "create_data_filter",
+    "create_media_filter",
+    "create_comprehensive_filter",
     "KeywordRelevanceScorer",
     "URLScorer",
     "CompositeScorer",
@@ -152,6 +199,12 @@ __all__ = [
     "LXMLWebScrapingStrategy",
     "BrowserConfig",
     "CrawlerRunConfig",
+    "ExhaustiveCrawlConfig",
+    "create_exhaustive_preset_config",
+    "create_exhaustive_bfs_strategy",
+    "create_minimal_filter_chain", 
+    "configure_exhaustive_crawler_settings",
+    "create_exhaustive_strategy_preset",
     "HTTPCrawlerConfig",
     "ExtractionStrategy",
     "LLMExtractionStrategy",
@@ -196,7 +249,18 @@ __all__ = [
     "BrowserAdapter",
     "PlaywrightAdapter", 
     "UndetectedAdapter",
-    "LinkPreviewConfig"
+    "LinkPreviewConfig",
+    # NEW: Exhaustive Crawling exports
+    "ExhaustiveAnalytics",
+    "DeadEndMetrics", 
+    "URLTrackingState",
+    "ExhaustiveAsyncWebCrawler",
+    "ExhaustiveCrawlConfig",
+    "create_exhaustive_crawler",
+    "ExhaustiveCrawlIntegration",
+    "configure_exhaustive_crawler",
+    "create_dead_end_detector",
+    "analyze_url_discovery_rate"
 ]
 
 

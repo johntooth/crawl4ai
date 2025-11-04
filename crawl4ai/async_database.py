@@ -97,6 +97,11 @@ class AsyncDatabaseManager:
                 await conn.close()
             self.connection_pool.clear()
 
+    def get_site_graph_manager(self):
+        """Get site graph database manager for this database instance"""
+        from .site_graph_db import SiteGraphDatabaseManager
+        return SiteGraphDatabaseManager(self)
+
     @asynccontextmanager
     async def get_connection(self):
         """Connection pool manager with enhanced error handling"""
@@ -267,6 +272,9 @@ class AsyncDatabaseManager:
             for column in new_columns:
                 if column not in column_names:
                     await self.aalter_db_add_column(column, db)
+            
+            # Initialize site graph schema if needed
+            await self._initialize_site_graph_schema(db)
             await db.commit()
 
     async def aalter_db_add_column(self, new_column: str, db):
@@ -284,6 +292,88 @@ class AsyncDatabaseManager:
             tag="INIT",
             params={"column": new_column},
         )
+
+    async def _initialize_site_graph_schema(self, db):
+        """Initialize site graph schema during database updates"""
+        try:
+            # Check if site graph tables already exist
+            async with db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='discovered_urls'"
+            ) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    return  # Tables already exist
+            
+            # Create discovered_urls table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS discovered_urls (
+                    url TEXT PRIMARY KEY,
+                    source_url TEXT,
+                    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_checked TIMESTAMP,
+                    status_code INTEGER,
+                    content_type TEXT,
+                    file_size INTEGER,
+                    is_file BOOLEAN DEFAULT FALSE,
+                    file_extension TEXT,
+                    download_status TEXT DEFAULT 'not_attempted',
+                    local_path TEXT,
+                    checksum TEXT,
+                    metadata TEXT DEFAULT '{}',
+                    error_message TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    FOREIGN KEY (source_url) REFERENCES discovered_urls(url)
+                )
+            """)
+            
+            # Create site_graph_stats table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS site_graph_stats (
+                    base_url TEXT PRIMARY KEY,
+                    total_urls_discovered INTEGER DEFAULT 0,
+                    total_files_discovered INTEGER DEFAULT 0,
+                    total_files_downloaded INTEGER DEFAULT 0,
+                    crawl_start_time TIMESTAMP,
+                    crawl_end_time TIMESTAMP,
+                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    dead_end_count INTEGER DEFAULT 0,
+                    revisit_ratio REAL DEFAULT 0.0
+                )
+            """)
+            
+            # Create indexes for performance
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_discovered_urls_source 
+                ON discovered_urls(source_url)
+            """)
+            
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_discovered_urls_is_file 
+                ON discovered_urls(is_file)
+            """)
+            
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_discovered_urls_status 
+                ON discovered_urls(download_status)
+            """)
+            
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_discovered_urls_discovered_at 
+                ON discovered_urls(discovered_at)
+            """)
+            
+            self.logger.info(
+                message="Site graph schema initialized successfully",
+                tag="INIT"
+            )
+            
+        except Exception as e:
+            self.logger.error(
+                message="Failed to initialize site graph schema: {error}",
+                tag="ERROR",
+                params={"error": str(e)}
+            )
+            # Don't raise - this is optional functionality
 
     async def aget_cached_url(self, url: str) -> Optional[CrawlResult]:
         """Retrieve cached URL data as CrawlResult"""

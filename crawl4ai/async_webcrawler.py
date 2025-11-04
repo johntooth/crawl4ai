@@ -3,9 +3,13 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Callable
 import json
 import asyncio
+import hashlib
+import aiohttp
+import aiofiles
+from urllib.parse import urlparse, urljoin
 
 # from contextlib import nullcontext, asynccontextmanager
 from contextlib import asynccontextmanager
@@ -161,6 +165,14 @@ class AsyncWebCrawler:
 
         self.ready = False
 
+        # Initialize event system for monitoring
+        self._event_handlers: Dict[str, List[Callable]] = {
+            'page_processed': [],
+            'crawl_completed': [],
+            'url_discovered': [],
+            'dead_end_detected': []
+        }
+
         # Decorate arun method with deep crawling capabilities
         self._deep_handler = DeepCrawlDecorator(self)
         self.arun = self._deep_handler(self.arun)
@@ -189,6 +201,75 @@ class AsyncWebCrawler:
         2. Close any open pages and contexts
         """
         await self.crawler_strategy.__aexit__(None, None, None)
+
+    def add_event_handler(self, event_type: str, handler: Callable) -> None:
+        """
+        Add an event handler for crawler events.
+        
+        Supported event types:
+        - 'page_processed': Called when a single page is processed
+        - 'crawl_completed': Called when a crawl batch is completed
+        - 'url_discovered': Called when new URLs are discovered
+        - 'dead_end_detected': Called when dead-end conditions are met
+        
+        Args:
+            event_type: Type of event to handle
+            handler: Callable to handle the event (can be sync or async)
+        """
+        if event_type not in self._event_handlers:
+            raise ValueError(f"Unknown event type: {event_type}. Supported types: {list(self._event_handlers.keys())}")
+        
+        self._event_handlers[event_type].append(handler)
+        
+        if self.logger:
+            self.logger.info(
+                f"Added event handler for '{event_type}' event",
+                tag="EVENT"
+            )
+
+    def remove_event_handler(self, event_type: str, handler: Callable) -> None:
+        """
+        Remove an event handler.
+        
+        Args:
+            event_type: Type of event
+            handler: Handler to remove
+        """
+        if event_type in self._event_handlers:
+            try:
+                self._event_handlers[event_type].remove(handler)
+                if self.logger:
+                    self.logger.info(
+                        f"Removed event handler for '{event_type}' event",
+                        tag="EVENT"
+                    )
+            except ValueError:
+                pass  # Handler not found
+
+    async def _emit_event(self, event_type: str, *args, **kwargs) -> None:
+        """
+        Emit an event to all registered handlers.
+        
+        Args:
+            event_type: Type of event to emit
+            *args: Arguments to pass to handlers
+            **kwargs: Keyword arguments to pass to handlers
+        """
+        if event_type not in self._event_handlers:
+            return
+        
+        for handler in self._event_handlers[event_type]:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(*args, **kwargs)
+                else:
+                    handler(*args, **kwargs)
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(
+                        f"Error in event handler for '{event_type}': {str(e)}",
+                        tag="EVENT_ERROR"
+                    )
 
     async def __aenter__(self):
         return await self.start()
@@ -391,6 +472,9 @@ class AsyncWebCrawler:
                         tag="COMPLETE",
                     )
 
+                    # Emit page_processed event for monitoring
+                    await self._emit_event('page_processed', crawl_result)
+
                     # Update cache if appropriate
                     if cache_context.should_write() and not bool(cached_result):
                         await async_db_manager.acache_url(crawl_result)
@@ -408,6 +492,10 @@ class AsyncWebCrawler:
                     cached_result.session_id = getattr(
                         config, "session_id", None)
                     cached_result.redirected_url = cached_result.redirected_url or url
+                    
+                    # Emit page_processed event for cached results too
+                    await self._emit_event('page_processed', cached_result)
+                    
                     return CrawlResultContainer(cached_result)
 
             except Exception as e:
@@ -760,7 +848,12 @@ class AsyncWebCrawler:
             return result_transformer()
         else:
             _results = await dispatcher.run_urls(crawler=self, urls=urls, config=config)
-            return [transform_result(res) for res in _results]
+            transformed_results = [transform_result(res) for res in _results]
+            
+            # Emit crawl_completed event for monitoring
+            await self._emit_event('crawl_completed', transformed_results)
+            
+            return transformed_results
 
     async def aseed_urls(
         self,
@@ -852,3 +945,298 @@ class AsyncWebCrawler:
             )
         else:
             raise ValueError("`domain_or_domains` must be a string or a list of strings.")
+
+    async def adownload_file(
+        self,
+        url: str,
+        download_path: Optional[str] = None,
+        filename: Optional[str] = None,
+        config: Optional[CrawlerRunConfig] = None,
+        validate_integrity: bool = True,
+        max_retries: int = 3,
+        chunk_size: int = 8192,
+        **kwargs
+    ) -> dict:
+        """
+        Download a file from a URL with integrity validation and retry mechanisms.
+        
+        This method leverages existing session management, proxy rotation, and rate limiting
+        for reliable file downloads with proper validation and error handling.
+        
+        Args:
+            url (str): The URL of the file to download
+            download_path (str, optional): Directory to save the file. Defaults to crawler's download directory
+            filename (str, optional): Custom filename. If None, extracts from URL or Content-Disposition header
+            config (CrawlerRunConfig, optional): Configuration for proxy, user agent, etc.
+            validate_integrity (bool): Whether to validate file integrity using checksums and size verification
+            max_retries (int): Maximum number of retry attempts on failure
+            chunk_size (int): Size of chunks for streaming download
+            **kwargs: Additional parameters for backwards compatibility
+            
+        Returns:
+            dict: Download result containing:
+                - success (bool): Whether download succeeded
+                - file_path (str): Path to downloaded file
+                - file_size (int): Size of downloaded file in bytes
+                - content_type (str): MIME type of the file
+                - checksum (str): SHA256 checksum of the file
+                - metadata (dict): Additional file metadata
+                - error_message (str): Error description if failed
+                - retry_count (int): Number of retries attempted
+                
+        Raises:
+            ValueError: If URL is invalid or file cannot be accessed
+            FileNotFoundError: If download directory cannot be created
+            PermissionError: If insufficient permissions to write file
+        """
+        # Auto-start if not ready
+        if not self.ready:
+            await self.start()
+            
+        config = config or CrawlerRunConfig()
+        
+        # Initialize result structure
+        result = {
+            "success": False,
+            "file_path": None,
+            "file_size": 0,
+            "content_type": None,
+            "checksum": None,
+            "metadata": {},
+            "error_message": None,
+            "retry_count": 0
+        }
+        
+        # Validate URL
+        if not isinstance(url, str) or not url.strip():
+            result["error_message"] = "Invalid URL: URL must be a non-empty string"
+            return result
+            
+        parsed_url = urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            result["error_message"] = f"Invalid URL format: {url}"
+            return result
+            
+        # Set up download directory
+        if download_path is None:
+            download_path = getattr(self.browser_config, 'downloads_path', None)
+            if download_path is None:
+                download_path = os.path.join(self.crawl4ai_folder, "downloads")
+                
+        # Ensure download directory exists
+        os.makedirs(download_path, exist_ok=True)
+        
+        # Set up session with existing configuration
+        session_kwargs = {}
+        
+        # Apply proxy configuration if available
+        if config.proxy_config:
+            proxy_url = config.proxy_config.server
+            if config.proxy_config.username and config.proxy_config.password:
+                auth = aiohttp.BasicAuth(config.proxy_config.username, config.proxy_config.password)
+                session_kwargs['auth'] = auth
+            session_kwargs['proxy'] = proxy_url
+            
+        # Set up headers with user agent
+        headers = {}
+        if config.user_agent:
+            headers['User-Agent'] = config.user_agent
+        elif hasattr(self.browser_config, 'user_agent') and self.browser_config.user_agent:
+            headers['User-Agent'] = self.browser_config.user_agent
+            
+        # Add custom headers if provided
+        if hasattr(config, 'headers') and config.headers:
+            headers.update(config.headers)
+            
+        session_kwargs['headers'] = headers
+        
+        # Set timeout configuration
+        timeout = aiohttp.ClientTimeout(
+            total=getattr(config, 'page_timeout', 30000) / 1000,  # Convert ms to seconds
+            connect=30,
+            sock_read=30
+        )
+        session_kwargs['timeout'] = timeout
+        
+        # Retry loop with exponential backoff
+        for attempt in range(max_retries + 1):
+            try:
+                result["retry_count"] = attempt
+                
+                # Apply rate limiting if available
+                if hasattr(self, '_domain_last_hit'):
+                    domain = parsed_url.netloc
+                    now = time.time()
+                    last_hit = self._domain_last_hit.get(domain, 0)
+                    min_delay = getattr(config, 'delay_between_requests', 1.0)
+                    
+                    if now - last_hit < min_delay:
+                        wait_time = min_delay - (now - last_hit)
+                        await asyncio.sleep(wait_time)
+                        
+                    self._domain_last_hit[domain] = time.time()
+                
+                self.logger.info(
+                    message="Starting file download from {url} (attempt {attempt}/{max_attempts})",
+                    tag="DOWNLOAD",
+                    params={"url": url, "attempt": attempt + 1, "max_attempts": max_retries + 1}
+                )
+                
+                async with aiohttp.ClientSession(**session_kwargs) as session:
+                    async with session.get(url) as response:
+                        # Check response status
+                        if response.status >= 400:
+                            error_msg = f"HTTP {response.status}: {response.reason}"
+                            
+                            # Check if we should retry based on status code
+                            if response.status in [429, 503, 502, 504] and attempt < max_retries:
+                                # Calculate exponential backoff delay
+                                delay = min(2 ** attempt, 60)  # Cap at 60 seconds
+                                self.logger.warning(
+                                    message="Download failed with status {status}, retrying in {delay}s",
+                                    tag="DOWNLOAD",
+                                    params={"status": response.status, "delay": delay}
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                result["error_message"] = error_msg
+                                return result
+                        
+                        # Extract filename if not provided
+                        if filename is None:
+                            # Try Content-Disposition header first
+                            content_disposition = response.headers.get('Content-Disposition', '')
+                            if 'filename=' in content_disposition:
+                                filename = content_disposition.split('filename=')[1].strip('"\'')
+                            else:
+                                # Extract from URL path
+                                filename = os.path.basename(parsed_url.path) or "downloaded_file"
+                                
+                        # Ensure filename has extension if possible
+                        if '.' not in filename:
+                            content_type = response.headers.get('Content-Type', '')
+                            if content_type:
+                                # Add basic extension mapping
+                                ext_map = {
+                                    'application/pdf': '.pdf',
+                                    'application/msword': '.doc',
+                                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                                    'application/vnd.ms-excel': '.xls',
+                                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+                                    'text/csv': '.csv',
+                                    'application/json': '.json',
+                                    'text/plain': '.txt',
+                                    'image/jpeg': '.jpg',
+                                    'image/png': '.png',
+                                    'application/zip': '.zip'
+                                }
+                                main_type = content_type.split(';')[0].strip()
+                                if main_type in ext_map:
+                                    filename += ext_map[main_type]
+                        
+                        # Construct full file path
+                        file_path = os.path.join(download_path, filename)
+                        
+                        # Handle filename conflicts
+                        counter = 1
+                        original_path = file_path
+                        while os.path.exists(file_path):
+                            name, ext = os.path.splitext(original_path)
+                            file_path = f"{name}_{counter}{ext}"
+                            counter += 1
+                        
+                        # Get content metadata
+                        content_length = response.headers.get('Content-Length')
+                        content_type = response.headers.get('Content-Type', 'application/octet-stream')
+                        last_modified = response.headers.get('Last-Modified')
+                        
+                        # Download file with streaming and checksum calculation
+                        hasher = hashlib.sha256()
+                        downloaded_size = 0
+                        
+                        async with aiofiles.open(file_path, 'wb') as f:
+                            async for chunk in response.content.iter_chunked(chunk_size):
+                                await f.write(chunk)
+                                hasher.update(chunk)
+                                downloaded_size += len(chunk)
+                        
+                        # Validate file integrity if requested
+                        if validate_integrity:
+                            # Verify file size if Content-Length was provided
+                            if content_length:
+                                expected_size = int(content_length)
+                                if downloaded_size != expected_size:
+                                    os.remove(file_path)  # Clean up incomplete file
+                                    result["error_message"] = f"Size mismatch: expected {expected_size}, got {downloaded_size}"
+                                    if attempt < max_retries:
+                                        delay = min(2 ** attempt, 60)
+                                        await asyncio.sleep(delay)
+                                        continue
+                                    return result
+                            
+                            # Verify file is accessible and not corrupted
+                            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                                result["error_message"] = "Downloaded file is empty or inaccessible"
+                                if attempt < max_retries:
+                                    delay = min(2 ** attempt, 60)
+                                    await asyncio.sleep(delay)
+                                    continue
+                                return result
+                        
+                        # Success - populate result
+                        result.update({
+                            "success": True,
+                            "file_path": file_path,
+                            "file_size": downloaded_size,
+                            "content_type": content_type,
+                            "checksum": hasher.hexdigest(),
+                            "metadata": {
+                                "filename": filename,
+                                "url": url,
+                                "last_modified": last_modified,
+                                "download_time": time.time(),
+                                "headers": dict(response.headers)
+                            }
+                        })
+                        
+                        self.logger.success(
+                            message="Successfully downloaded {filename} ({size} bytes)",
+                            tag="DOWNLOAD",
+                            params={
+                                "filename": filename,
+                                "size": downloaded_size,
+                                "path": file_path,
+                                "checksum": result["checksum"][:16] + "..."
+                            }
+                        )
+                        
+                        return result
+                        
+            except aiohttp.ClientError as e:
+                error_msg = f"Network error: {str(e)}"
+                self.logger.warning(
+                    message="Download attempt {attempt} failed: {error}",
+                    tag="DOWNLOAD",
+                    params={"attempt": attempt + 1, "error": error_msg}
+                )
+                
+                if attempt < max_retries:
+                    # Exponential backoff with jitter
+                    delay = min(2 ** attempt * (0.5 + 0.5 * time.time() % 1), 60)
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    result["error_message"] = error_msg
+                    
+            except Exception as e:
+                error_msg = f"Unexpected error: {str(e)}"
+                self.logger.error(
+                    message="Download failed with unexpected error: {error}",
+                    tag="ERROR",
+                    params={"error": error_msg, "url": url}
+                )
+                result["error_message"] = error_msg
+                break
+        
+        return result
