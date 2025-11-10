@@ -1,0 +1,598 @@
+﻿<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>Domain Intelligence Dashboard v2.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/split.js/1.6.5/split.min.js"></script>
+    <link href="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <style>
+        .vis-network canvas {
+            background-color: #1f1f1f !important;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 30px 30px;
+        }
+
+        /* Split.js styles */
+        .gutter {
+            background-color: #2d2d2d;
+            background-repeat: no-repeat;
+            background-position: 50%;
+        }
+
+        .gutter.gutter-horizontal {
+            cursor: col-resize;
+            background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAeCAYAAADkftS9AAAAIklEQVQoU2M4c+bMfxAGAgYYmwGrIIiDjrELjpo5aiZeMwF+yNnOs5KSvgAAAABJRU5ErkJggg==');
+        }
+
+        /* Sidebar styles */
+        .sidebar-collapse-btn {
+            position: absolute;
+            top: 10px;
+            background-color: #2d2d2d;
+            color: #999;
+            border: none;
+            border-radius: 4px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        .sidebar-collapse-btn:hover {
+            background-color: #444;
+            color: #eee;
+        }
+
+        #leftSidebarToggle {
+            right: -12px;
+        }
+
+        #leftSidebarToggle.collapsed {
+            right: -20px;
+        }
+
+        #rightSidebarToggle {
+            left: -12px;
+        }
+
+        .collapsed {
+            width: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+        }
+
+        .full-width {
+            width: 100% !important;
+        }
+
+        .splitter-container {
+            height: 100%;
+            display: flex;
+        }
+    </style>
+
+    <!-- Toast notification style -->
+    <style>
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #2d2d2d;
+            color: #eee;
+            padding: 10px 20px;
+            border-radius: 4px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        #toast.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+
+<body class="h-screen flex flex-col bg-neutral-900 text-neutral-100 overflow-hidden">
+    <!-- Toast notification -->
+    <div id="toast"></div>
+
+    <!-- Session Restore Modal -->
+    <div id="sessionRestoreModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-neutral-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex items-center mb-4">
+                <i class="fas fa-history text-blue-400 text-2xl mr-3"></i>
+                <h2 class="text-xl font-semibold text-neutral-100">Resume Previous Crawl?</h2>
+            </div>
+            <p class="text-neutral-300 mb-4">
+                We found a previous crawl session. Would you like to resume where you left off?
+            </p>
+            <div id="sessionRestoreDetails" class="bg-neutral-700 rounded p-3 mb-4 text-sm">
+                <!-- Session details will be inserted here -->
+            </div>
+            <div class="flex space-x-3">
+                <button id="resumeSessionBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded transition-colors">
+                    <i class="fas fa-play mr-2"></i>Resume
+                </button>
+                <button id="discardSessionBtn" class="flex-1 bg-neutral-600 hover:bg-neutral-500 text-white font-semibold py-2 px-4 rounded transition-colors">
+                    <i class="fas fa-times mr-2"></i>Start Fresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex flex-1 splitter-container" id="mainSplitter">
+        <!-- Left Sidebar: Page List -->
+        <div id="leftSidebar" class="p-2 border-r border-neutral-700 relative w-72 overflow-y-auto">
+            <button id="leftSidebarToggle" class="sidebar-collapse-btn">
+                <i class="fa fa-chevron-left"></i>
+            </button>
+            <input id="search" class="w-full mb-3 p-2 border rounded bg-neutral-800 text-neutral-100 border-neutral-600"
+                placeholder="Search pages">
+            <div class="text-xs text-neutral-400 mb-2 flex justify-between items-center">
+                <span>Pages</span>
+                <span id="pageCount">0 pages</span>
+            </div>
+            <div id="pageListContainer" class="relative overflow-y-auto" style="height: calc(100vh - 180px);">
+                <div id="pageListSpacer" style="position: relative;"></div>
+                <ul id="pageList" class="text-sm" style="position: absolute; top: 0; left: 0; right: 0;"></ul>
+            </div>
+        </div>
+
+        <!-- Main Content: Graph Visualization -->
+        <div id="mainContent" class="flex-1 relative">
+            <!-- URL Input Form Panel (Centered, No Overlay) -->
+            <div id="crawlInputPanel" class="w-full h-full flex items-center justify-center p-8">
+                <div class="bg-neutral-800 rounded-lg shadow-xl p-6 w-full max-w-md">
+                    <h3 class="text-2xl font-bold mb-6 text-neutral-100 text-center">Start Site Mapping</h3>
+
+                <!-- URL Input -->
+                <div class="mb-3">
+                    <label class="block text-sm font-medium text-neutral-300 mb-1">Starting URL</label>
+                    <input type="text" id="crawlUrlInput"
+                        class="w-full p-2 border rounded bg-neutral-700 text-neutral-100 border-neutral-600 focus:border-blue-500 focus:outline-none"
+                        placeholder="https://example.com">
+                    <div id="urlError" class="text-red-400 text-xs mt-1 hidden"></div>
+                </div>
+
+                <!-- Max Pages Input -->
+                <div class="mb-3">
+                    <label class="block text-sm font-medium text-neutral-300 mb-1">Maximum Pages</label>
+                    <input type="number" id="maxPagesInput" value="1000" min="1" max="10000" step="50"
+                        class="w-full p-2 border rounded bg-neutral-700 text-neutral-100 border-neutral-600 focus:border-blue-500 focus:outline-none"
+                        placeholder="e.g., 50 for testing">
+                    <p class="text-xs text-neutral-500 mt-1">Limit crawl to this many pages (for testing)</p>
+                </div>
+
+                <!-- File Types Checkboxes -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-neutral-300 mb-2">Target File Types</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="flex items-center text-sm text-neutral-300 cursor-pointer hover:text-neutral-100">
+                            <input type="checkbox" id="fileTypePdf" value="pdf" checked
+                                class="mr-2 rounded bg-neutral-700 border-neutral-600">
+                            <span>PDF</span>
+                        </label>
+                        <label class="flex items-center text-sm text-neutral-300 cursor-pointer hover:text-neutral-100">
+                            <input type="checkbox" id="fileTypeDoc" value="doc" checked
+                                class="mr-2 rounded bg-neutral-700 border-neutral-600">
+                            <span>DOC/DOCX</span>
+                        </label>
+                        <label class="flex items-center text-sm text-neutral-300 cursor-pointer hover:text-neutral-100">
+                            <input type="checkbox" id="fileTypeXls" value="xls" checked
+                                class="mr-2 rounded bg-neutral-700 border-neutral-600">
+                            <span>XLS/XLSX</span>
+                        </label>
+                        <label class="flex items-center text-sm text-neutral-300 cursor-pointer hover:text-neutral-100">
+                            <input type="checkbox" id="fileTypePpt" value="ppt" checked
+                                class="mr-2 rounded bg-neutral-700 border-neutral-600">
+                            <span>PPT/PPTX</span>
+                        </label>
+                        <label class="flex items-center text-sm text-neutral-300 cursor-pointer hover:text-neutral-100">
+                            <input type="checkbox" id="fileTypeZip" value="zip"
+                                class="mr-2 rounded bg-neutral-700 border-neutral-600">
+                            <span>ZIP</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Start Mapping Button -->
+                <button id="startMappingBtn"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded transition-colors flex items-center justify-center">
+                    <i class="fas fa-play mr-2"></i>
+                    <span id="startMappingBtnText">Start Mapping</span>
+                </button>
+                </div>
+            </div>
+
+            <!-- Metrics Dashboard -->
+            <div id="metricsDashboard" class="w-full h-full p-8 overflow-y-auto hidden">
+                <div class="max-w-6xl mx-auto">
+                    <!-- Header with Controls -->
+                    <div class="flex items-center justify-between mb-8">
+                        <h2 class="text-3xl font-bold text-neutral-100">Crawl Metrics</h2>
+                        <div class="flex space-x-2">
+                            <button id="pauseCrawlBtn"
+                                class="bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors">
+                                <i class="fas fa-pause mr-2"></i>Pause
+                            </button>
+                            <button id="stopCrawlBtn"
+                                class="bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors">
+                                <i class="fas fa-stop mr-2"></i>Stop
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Current Page & Elapsed Time -->
+                    <div class="bg-neutral-800 rounded-lg p-4 mb-8 flex items-center justify-between">
+                        <div class="flex-1">
+                            <div class="text-xs text-neutral-400 mb-1">Currently Crawling</div>
+                            <div class="text-sm text-neutral-200 truncate" id="currentPage">-</div>
+                        </div>
+                        <div class="text-right ml-4">
+                            <div class="text-xs text-neutral-400 mb-1">Elapsed Time</div>
+                            <div class="text-lg font-semibold text-neutral-100" id="elapsedTime">0:00</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Real-time Stats Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <!-- Pages Discovered -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Pages Discovered</h3>
+                                <i class="fas fa-globe text-blue-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricPagesDiscovered">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Total URLs found</div>
+                        </div>
+                        
+                        <!-- Pages Crawled -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Pages Crawled</h3>
+                                <i class="fas fa-check-circle text-green-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricPagesCrawled">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Successfully processed</div>
+                        </div>
+                        
+                        <!-- Documents Found -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Documents Found</h3>
+                                <i class="fas fa-file-alt text-purple-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricDocumentsFound">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Files discovered</div>
+                        </div>
+                        
+                        <!-- Crawl Rate -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Crawl Rate</h3>
+                                <i class="fas fa-tachometer-alt text-yellow-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricCrawlRate">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">pages/minute</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Additional Metrics Row -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <!-- Pages Failed -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Pages Failed</h3>
+                                <i class="fas fa-exclamation-triangle text-red-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricPagesFailed">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Errors encountered</div>
+                        </div>
+                        
+                        <!-- Current Depth -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Current Depth</h3>
+                                <i class="fas fa-layer-group text-cyan-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricCurrentDepth">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Processing level</div>
+                        </div>
+                        
+                        <!-- Max Depth Reached -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Max Depth</h3>
+                                <i class="fas fa-arrow-down text-indigo-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricMaxDepth">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">Deepest level reached</div>
+                        </div>
+                        
+                        <!-- Pages Per Second -->
+                        <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-sm font-medium text-neutral-400">Speed</h3>
+                                <i class="fas fa-bolt text-amber-500 text-xl"></i>
+                            </div>
+                            <div class="text-4xl font-bold text-neutral-100" id="metricPagesPerSecond">0</div>
+                            <div class="text-xs text-neutral-500 mt-2">pages/second</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Depth Distribution -->
+                    <div class="bg-neutral-800 rounded-lg p-6 shadow-lg mb-8">
+                        <h3 class="text-lg font-semibold text-neutral-100 mb-4">Depth Distribution</h3>
+                        <div id="depthDistribution" class="space-y-3">
+                            <!-- Will be populated dynamically -->
+                        </div>
+                    </div>
+                    
+                    <!-- Document Types -->
+                    <div class="bg-neutral-800 rounded-lg p-6 shadow-lg mb-8">
+                        <h3 class="text-lg font-semibold text-neutral-100 mb-4">Document Types</h3>
+                        <div id="documentTypes" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <!-- Will be populated dynamically -->
+                        </div>
+                    </div>
+                    
+                    <!-- Recent Activity -->
+                    <div class="bg-neutral-800 rounded-lg p-6 shadow-lg mb-8">
+                        <h3 class="text-lg font-semibold text-neutral-100 mb-4">Recent Activity</h3>
+                        <div id="recentActivity" class="space-y-2 max-h-64 overflow-y-auto">
+                            <!-- Will be populated dynamically -->
+                        </div>
+                    </div>
+                    
+                    <!-- Export Actions -->
+                    <div class="bg-neutral-800 rounded-lg p-6 shadow-lg">
+                        <h3 class="text-lg font-semibold text-neutral-100 mb-4">Export & Download</h3>
+                        
+                        <!-- Summary -->
+                        <div class="mb-4 text-sm bg-neutral-700 p-3 rounded">
+                            <div class="flex justify-between mb-1">
+                                <span class="text-neutral-400">Total Pages:</span>
+                                <span class="text-neutral-100 font-semibold" id="exportPageCount">0</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-neutral-400">Total Documents:</span>
+                                <span class="text-neutral-100 font-semibold" id="exportDocCount">0</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Action Buttons -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <button id="exportCsvBtn"
+                                class="bg-green-600 hover:bg-green-700 text-white py-3 px-4 rounded transition-colors flex items-center justify-center">
+                                <i class="fas fa-file-csv mr-2"></i>
+                                <span>Export CSV</span>
+                            </button>
+                            <button id="downloadAllBtn"
+                                class="bg-purple-600 hover:bg-purple-700 text-white py-3 px-4 rounded transition-colors flex items-center justify-center">
+                                <i class="fas fa-download mr-2"></i>
+                                <span>Download Files</span>
+                            </button>
+                        </div>
+                        <p class="text-xs text-neutral-400 mt-2 text-center">
+                            Files download to E:\filefinder\{domain}\
+                        </p>
+                        
+                        <!-- New Crawl Button -->
+                        <div class="mt-4 pt-4 border-t border-neutral-700">
+                            <button id="backToInputBtn"
+                                class="w-full bg-neutral-700 hover:bg-neutral-600 text-neutral-200 py-3 px-4 rounded transition-colors flex items-center justify-center">
+                                <i class="fas fa-arrow-left mr-2"></i>
+                                <span>Start New Crawl</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Sidebar: Page Details -->
+        <div id="rightSidebar" class="bg-neutral-800 shadow-lg relative w-80 overflow-y-auto">
+            <button id="rightSidebarToggle" class="sidebar-collapse-btn">
+                <i class="fa fa-chevron-right"></i>
+            </button>
+            <div id="rightPane" class="h-full">
+                <div class="flex flex-col items-center justify-center h-full p-8 text-center">
+                    <div class="text-neutral-500 mb-4">
+                        <i class="fas fa-file-alt text-4xl"></i>
+                    </div>
+                    <h3 class="text-lg font-semibold mb-2">Page Details</h3>
+                    <p class="text-neutral-400 text-sm">Select a page to view its details and discovered documents.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Modular JavaScript - Phase 1B Complete -->
+    <script type="module">
+        // Import main app initialization
+        import './static/js/main.js';
+        
+        // main.js will auto-initialize when loaded
+    </script>
+    
+    <!-- Legacy graph initialization (will be moved to graph.js in Phase 2) -->
+    <script>
+        // Placeholder for graph initialization
+        // This will be fully modularized in Phase 2
+        let network = null;
+        let siteGraphData = { nodes: [], edges: [] };
+        
+        // Initialize vis-network graph
+        function initGraph() {
+            const container = document.getElementById('siteGraph');
+            if (!container) return;
+            
+            const data = {
+                nodes: new vis.DataSet([]),
+                edges: new vis.DataSet([])
+            };
+            
+            const options = {
+                nodes: {
+                    shape: 'dot',
+                    size: 16,
+                    font: {
+                        size: 12,
+                        color: '#e5e7eb'
+                    },
+                    borderWidth: 2,
+                    shadow: true
+                },
+                edges: {
+                    width: 1,
+                    color: { color: '#4b5563', highlight: '#60a5fa' },
+                    arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+                    smooth: { type: 'continuous' }
+                },
+                physics: {
+                    enabled: true,
+                    barnesHut: {
+                        gravitationalConstant: -2000,
+                        centralGravity: 0.3,
+                        springLength: 95,
+                        springConstant: 0.04
+                    },
+                    stabilization: { iterations: 150 }
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200,
+                    zoomView: true,
+                    dragView: true
+                },
+                layout: {
+                    improvedLayout: true,
+                    hierarchical: {
+                        enabled: false
+                    }
+                }
+            };
+            
+            network = new vis.Network(container, data, options);
+            
+            // Event listeners
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    console.log('Node clicked:', nodeId);
+                    // Node details will be handled in Phase 2
+                }
+            });
+        }
+        
+        // Update graph with new data
+        function updateGraphData(pages) {
+            if (!network) return;
+            
+            const nodes = new vis.DataSet();
+            const edges = new vis.DataSet();
+            
+            // Build graph from pages
+            pages.forEach(page => {
+                nodes.add({
+                    id: page.id,
+                    label: page.title || page.url.split('/').pop() || 'Page',
+                    title: page.url,
+                    color: page.status === 'crawled' ? '#10b981' : '#ef4444',
+                    size: 20 + (page.depth * 5)
+                });
+                
+                // Add edge to parent if exists
+                if (page.parent_id) {
+                    edges.add({
+                        from: page.parent_id,
+                        to: page.id
+                    });
+                }
+            });
+            
+            // Update network
+            network.setData({ nodes, edges });
+            
+            // Fit to view if first update
+            if (pages.length > 0 && pages.length < 10) {
+                network.fit({ animation: true });
+            }
+        }
+        
+        // Initialize graph when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initGraph);
+        } else {
+            initGraph();
+        }
+        
+        // Make functions available globally
+        window.network = network;
+        window.siteGraphData = siteGraphData;
+        window.updateGraphData = updateGraphData;
+    </script>
+    
+    <!-- Legacy table rendering (will be moved to tables.js in Phase 2) -->
+    <script>
+        // Placeholder for table rendering
+        // This will be fully modularized in Phase 2
+        
+        function renderPagesTable(pages) {
+            const tbody = document.getElementById('pagesTableBody');
+            if (!tbody) return;
+            
+            tbody.innerHTML = pages.map(page => `
+                <tr class="hover:bg-neutral-700">
+                    <td class="px-4 py-2 text-sm">${page.url}</td>
+                    <td class="px-4 py-2 text-sm text-center">${page.depth}</td>
+                    <td class="px-4 py-2 text-sm text-center">
+                        <span class="px-2 py-1 rounded text-xs ${page.status === 'crawled' ? 'bg-green-600' : 'bg-red-600'}">
+                            ${page.status}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        function renderDocumentsTable(documents) {
+            const tbody = document.getElementById('documentsTableBody');
+            if (!tbody) return;
+            
+            tbody.innerHTML = documents.map(doc => `
+                <tr class="hover:bg-neutral-700">
+                    <td class="px-4 py-2 text-sm">${doc.filename}</td>
+                    <td class="px-4 py-2 text-sm text-center">${doc.file_type.toUpperCase()}</td>
+                    <td class="px-4 py-2 text-sm">${doc.source_page}</td>
+                    <td class="px-4 py-2 text-sm text-center">
+                        <span class="px-2 py-1 rounded text-xs ${doc.download_status === 'completed' ? 'bg-green-600' : 'bg-yellow-600'}">
+                            ${doc.download_status}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        // Make functions available globally
+        window.renderPagesTable = renderPagesTable;
+        window.renderDocumentsTable = renderDocumentsTable;
+    </script>
+</body>
+
+</html>

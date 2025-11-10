@@ -1,0 +1,9 @@
+# Domain Intelligence Dashboard Server Requirements
+# These are additional dependencies needed for the dashboard server
+
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.10.0
+
+# Note: crawl4ai and its dependencies should already be installed
+# from the main project requirements.txt
